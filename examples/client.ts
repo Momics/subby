@@ -2,8 +2,7 @@ import { createClient } from "../client.ts";
 
 const client = createClient({
   url: "ws://localhost:4004",
-  lazyCloseTimeout: 2000,
-  lazy: false,
+  // lazyCloseTimeout: 2000,
 
   handleOpen(openPayload) {
     console.log("onOpen", openPayload);
@@ -35,18 +34,20 @@ const client = createClient({
   },
 });
 
-client.subscribe(
-  "test",
-  { test: true },
-  {
-    complete() {
-      console.log("complete");
-    },
-    error() {
-      console.log("error");
-    },
-    next(value) {
-      console.log("next", value);
-    },
-  }
-);
+setTimeout(() => {
+  client.subscribe(
+    "test",
+    { test: true },
+    {
+      complete() {
+        console.log("complete");
+      },
+      error() {
+        console.log("error");
+      },
+      next(value) {
+        console.log("next", value);
+      },
+    }
+  );
+}, 5000);

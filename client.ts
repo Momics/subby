@@ -712,6 +712,22 @@ export function createClient<OpenPayload, InitPayload, AckPayload>(
       };
     },
 
+    /**
+     * If you know the client will soon need a websocket connection (e.g. tab is in view)
+     * You can choose to 'warmup' the socket connection by calling this method.
+     *
+     * @param timeout The amount of time to wait for the connection to close again.
+     */
+    async warmup(releaseInMs = 10000) {
+      locks++;
+      const [, release] = await connect();
+
+      setTimeout(() => {
+        locks--;
+        release();
+      }, releaseInMs);
+    },
+
     async dispose() {
       disposed = true;
       if (connecting) {
