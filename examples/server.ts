@@ -9,11 +9,15 @@ interface InitPayload {
   init: "true";
 }
 
+interface OpenPayload {
+  sign: true;
+}
+
 interface State {
   test?: boolean;
 }
 
-const server = createServer<State, InitPayload>({
+const server = createServer<State, OpenPayload, InitPayload, undefined>({
   connectionInitWaitTimeout: 2000,
   methods: {
     test: async (params, ctx) => {
@@ -26,16 +30,16 @@ const server = createServer<State, InitPayload>({
       };
     },
   },
-  handleInit(ctx) {
-    console.log("onAck");
+  handleInit({ initPayload }) {
+    console.log("handleInit", initPayload);
 
-    return {
-      ackPayload: true,
-    };
+    if (initPayload?.init !== "true") {
+      return false;
+    }
   },
   handleOpen(ctx) {
     return {
-      signMe: true,
+      sign: true,
     };
   },
   onClose(ctx, code, reason) {

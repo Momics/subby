@@ -39,7 +39,7 @@ export interface Context<State = any, InitPayload = any> {
   state: State;
 }
 
-export interface ServerOptions<State, InitPayload> {
+export interface ServerOptions<State, OpenPayload, InitPayload, AckPayload> {
   /** All callable methods */
   methods?: { [key: string]: Method<State> };
 
@@ -53,14 +53,14 @@ export interface ServerOptions<State, InitPayload> {
   ) => Promise<State> | State;
 
   /** A function to decline a connection and/or set context */
-  handleOpen?: <OpenPayload>(
+  handleOpen?: (
     ctx: Context<State, InitPayload>
   ) => Promise<OpenPayload | void> | OpenPayload | void;
 
   /** Function called when the connection is just about to be acknowledged */
-  handleInit?: <AckPayload>(
+  handleInit?: (
     ctx: Context<State, InitPayload>
-  ) => Promise<AckPayload | void> | AckPayload | void;
+  ) => Promise<AckPayload | void | false> | AckPayload | void | false;
 
   /** Triggered on close */
   onClose?: (
@@ -79,8 +79,8 @@ export interface ServerOptions<State, InitPayload> {
   onMessage?: (message: Message) => void;
 }
 
-export function createServer<State, InitPayload>(
-  options: ServerOptions<State, InitPayload>
+export function createServer<State, OpenPayload, InitPayload, AckPayload>(
+  options: ServerOptions<State, OpenPayload, InitPayload, AckPayload>
 ) {
   const { connectionInitWaitTimeout = 3_000 } = options;
 
@@ -181,7 +181,7 @@ export function createServer<State, InitPayload>(
             ctx.initiated = true;
 
             // @ts-expect-error: I can write
-            ctx.initPayload = message.payload;
+            ctx.initPayload = message[1];
 
             const ackPayload = await options.handleInit?.(ctx);
             if (ackPayload === false) {

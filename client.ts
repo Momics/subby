@@ -226,7 +226,7 @@ export interface ClientOptions<OpenPayload, InitPayload, AckPayload> {
    * Called when the server has sent a connection open message. If not specified,
    * the client will automatically emit a connection init message without a payload.
    */
-  onOpen?: (payload?: OpenPayload) => Promise<InitPayload> | InitPayload;
+  handleOpen?: (payload?: OpenPayload) => Promise<InitPayload> | InitPayload;
 }
 
 export function createClient<OpenPayload, InitPayload, AckPayload>(
@@ -234,7 +234,7 @@ export function createClient<OpenPayload, InitPayload, AckPayload>(
 ) {
   const {
     url,
-    onOpen,
+    handleOpen,
     lazy = true,
     onNonLazyError = console.error,
     lazyCloseTimeout = 0,
@@ -478,7 +478,7 @@ export function createClient<OpenPayload, InitPayload, AckPayload>(
                   emitter.emit("opened", socket, message[1]);
 
                   // Default is no payload
-                  const initPayload = await options.onOpen?.(
+                  const initPayload = await handleOpen?.(
                     message[1] as OpenPayload
                   );
 

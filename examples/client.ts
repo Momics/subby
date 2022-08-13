@@ -4,6 +4,15 @@ const client = createClient({
   url: "ws://localhost:4004",
   lazyCloseTimeout: 2000,
   lazy: false,
+
+  handleOpen(openPayload) {
+    console.log("onOpen", openPayload);
+
+    return {
+      init: "true",
+    };
+  },
+
   on: {
     connecting: () => {
       console.log("connecting");
