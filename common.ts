@@ -30,10 +30,16 @@ export enum CloseCode {
 }
 
 /**
- * Includes all message types in Noat
- * Types are deliberately small integers so that msgpack can optimize space.
+ * All message types
  *
- * NOTE: Ping/Pong is exluded since it is handled by the Deno websocket.
+ * It's not necessary to send known keys with every message so messages travel
+ * over the wire as arrays to save bandwidth. Since messages are binary encoded
+ * anyway, this doesn't sacrifice readability of messages in any way.
+ *
+ * Types are deliberately small integers which are packed as smaller
+ * ints on the wire by msgpack.
+ *
+ * NOTE: Ping/Pong is exluded since it is handled by Deno websocket server internally.
  */
 export enum MessageType {
   ConnectionOpen = 0, // server -> client
@@ -44,76 +50,76 @@ export enum MessageType {
   Complete = 4, // bidi
   Next = 5, // server -> client
   Error = 6, // server -> client
-}
 
-/** When traveling over the wire, a message must be Uint8Array */
-export type WireMessage = Uint8Array;
-
-/** When unpacked, a wire message must be an array with type as first element */
-export type UnpackedWireMessage = [MessageType, ...unknown[]];
-
-/**
- * Sent by the client in response to an ConnectionAckMessage
- */
-export interface ConnectionOpenMessage {
-  readonly type: MessageType.ConnectionOpen;
-  readonly payload?: unknown;
+  Ping = 7, // bidi
+  Pong = 8, // bidi
 }
 
 /**
  * Sent by the client in response to an ConnectionAckMessage
  */
-export interface ConnectionInitMessage {
-  readonly type: MessageType.ConnectionInit;
-  readonly payload?: unknown;
-}
+export type ConnectionOpenMessage = [
+  type: MessageType.ConnectionOpen,
+  payload?: unknown
+];
+
+/**
+ * Sent by the client in response to an ConnectionAckMessage
+ */
+export type ConnectionInitMessage = [
+  type: MessageType.ConnectionInit,
+  payload?: unknown
+];
 
 /**
  * Sent by the server to the client to acknowledge a connection
  */
-export interface ConnectionAckMessage {
-  readonly type: MessageType.ConnectionAck;
-  readonly payload?: unknown;
-}
+export type ConnectionAckMessage = [
+  type: MessageType.ConnectionAck,
+  payload?: unknown
+];
 
 /**
  * Sent by the client to the server to subscribe to a method.
  * Everything in Noat is a subscription, even request / response.
  */
-export interface SubscribeMessage {
-  readonly type: MessageType.Subscribe;
-  readonly id: number;
-  readonly method: string;
-  readonly params?: unknown;
-}
+export type SubscribeMessage = [
+  type: MessageType.Subscribe,
+  id: number,
+  method: string,
+  params?: unknown
+];
 
 /**
  * Sent to terminate a subscription.
  */
-export interface CompleteMessage {
-  readonly type: MessageType.Complete;
-  readonly id: number;
-}
+export type CompleteMessage = [type: MessageType.Complete, id: number];
 
 /**
  * The next value in a subscription.
  */
-export interface NextMessage {
-  readonly type: MessageType.Next;
-  readonly id: number;
-  readonly value: unknown;
-}
+export type NextMessage = [type: MessageType.Next, id: number, value: unknown];
 
 /**
  * Sent by server when a subscription results in an error.
  * This automatically terminates the subscription.
  */
-export interface ErrorMessage {
-  readonly type: MessageType.Error;
-  readonly id: number;
-  readonly code: string;
-  readonly data?: unknown;
-}
+export type ErrorMessage = [
+  type: MessageType.Error,
+  id: number,
+  code: string,
+  payload?: unknown
+];
+
+/**
+ * Ping can be done by either side.
+ */
+export type PingMessage = [type: MessageType.Ping, payload?: unknown];
+
+/**
+ * Sent in response to a ping message. Will contain the payload of the ping message.
+ */
+export type PongMessage = [type: MessageType.Pong, payload?: unknown];
 
 export type Message<T extends MessageType = MessageType> =
   T extends MessageType.ConnectionOpen
@@ -130,6 +136,10 @@ export type Message<T extends MessageType = MessageType> =
     ? NextMessage
     : T extends MessageType.Error
     ? ErrorMessage
+    : T extends MessageType.Ping
+    ? PingMessage
+    : T extends MessageType.Pong
+    ? PongMessage
     : never;
 
 /**
@@ -137,11 +147,12 @@ export type Message<T extends MessageType = MessageType> =
  * @param val
  */
 export function unpackMessage(data: unknown): Message {
-  if (!(data instanceof Uint8Array)) {
-    throw new Error(`Message must be a Uint8Array`);
+  if (!(data instanceof ArrayBuffer)) {
+    throw new Error(`Message must be an ArrayBuffer`);
   }
 
-  const msg = unpack(data);
+  const view = new Uint8Array(data);
+  const msg = unpack(view);
   const type = msg[0] as MessageType;
 
   if (typeof type !== "number") {
@@ -149,43 +160,26 @@ export function unpackMessage(data: unknown): Message {
   }
 
   switch (type) {
+    case MessageType.ConnectionOpen: {
+      if (msg.length !== 1 && msg.length !== 2) {
+        throw new Error(`Open message must have 1 or 2 elements`);
+      }
+
+      return msg as ConnectionAckMessage;
+    }
     case MessageType.ConnectionAck: {
       if (msg.length !== 1 && msg.length !== 2) {
         throw new Error(`Ack message must have 1 or 2 elements`);
       }
 
-      if (!(msg[1] instanceof Uint8Array)) {
-        throw new Error(
-          `Ack message must have a Uint8Array as the second element`
-        );
-      }
-
-      return {
-        type,
-        payload: msg[1],
-      } as ConnectionAckMessage;
+      return msg as ConnectionAckMessage;
     }
     case MessageType.ConnectionInit: {
       if (msg.length !== 1 && msg.length !== 2) {
         throw new Error(`Init message must have 1 or 2 elements`);
       }
 
-      if (!(msg[1] instanceof Uint8Array)) {
-        throw new Error(
-          `Init message must have a Uint8Array as the second element`
-        );
-      }
-
-      if (!(msg[2] instanceof Uint8Array)) {
-        throw new Error(
-          `Init message must have a Uint8Array as the third element`
-        );
-      }
-
-      return {
-        type,
-        payload: msg[1],
-      } as ConnectionInitMessage;
+      return msg as ConnectionInitMessage;
     }
     case MessageType.Subscribe: {
       if (msg.length !== 3 && msg.length !== 4) {
@@ -204,12 +198,7 @@ export function unpackMessage(data: unknown): Message {
         );
       }
 
-      return {
-        type,
-        id: msg[1],
-        method: msg[2],
-        params: msg[3],
-      } as SubscribeMessage;
+      return msg as SubscribeMessage;
     }
     case MessageType.Complete: {
       if (msg.length !== 2) {
@@ -222,10 +211,7 @@ export function unpackMessage(data: unknown): Message {
         );
       }
 
-      return {
-        type,
-        id: msg[1],
-      } as CompleteMessage;
+      return msg as CompleteMessage;
     }
     case MessageType.Next: {
       if (msg.length !== 3 && msg.length !== 4) {
@@ -238,11 +224,7 @@ export function unpackMessage(data: unknown): Message {
         );
       }
 
-      return {
-        type,
-        id: msg[1],
-        value: msg[2],
-      } as NextMessage;
+      return msg as NextMessage;
     }
     case MessageType.Error: {
       if (msg.length !== 3) {
@@ -261,12 +243,21 @@ export function unpackMessage(data: unknown): Message {
         );
       }
 
-      return {
-        type,
-        id: msg[1],
-        code: msg[2],
-        data: msg[3],
-      } as ErrorMessage;
+      return msg as ErrorMessage;
+    }
+    case MessageType.Ping: {
+      if (msg.length !== 1 && msg.length !== 2) {
+        throw new Error(`Ping message must have 1 or 2 elements`);
+      }
+
+      return msg as ConnectionAckMessage;
+    }
+    case MessageType.Pong: {
+      if (msg.length !== 1 && msg.length !== 2) {
+        throw new Error(`Pong message must have 1 or 2 elements`);
+      }
+
+      return msg as ConnectionAckMessage;
     }
     default:
       throw new Error(`Unknown message type: ${type}`);
@@ -279,60 +270,91 @@ export function unpackMessage(data: unknown): Message {
  * NOTE: This packs the message into an array format so that keys can be
  *      discarded, saving a couple of bytes on the wire.
  *
- * @param message
+ * @param msg
  * @returns
  */
 export function packMessage<T extends MessageType>(
-  message: Message<T>
+  msg: Message<T>
 ): Uint8Array {
-  switch (message.type) {
+  switch (msg[0]) {
+    case MessageType.ConnectionOpen: {
+      return pack(msg);
+    }
     case MessageType.ConnectionAck: {
-      return pack([message.type, message.payload]);
+      return pack(msg);
     }
     case MessageType.ConnectionInit: {
-      return pack([message.type, message.payload]);
+      return pack(msg);
     }
     case MessageType.Subscribe: {
-      if (typeof message.id !== "number") {
+      if (typeof msg[1] !== "number") {
         throw new Error(`Subscribe message must have a id key of value number`);
       }
 
-      if (typeof message.method !== "string") {
+      if (typeof msg[2] !== "string") {
         throw new Error(
           `Subscribe message must have a method key of value string`
         );
       }
 
-      return pack([message.type, message.id, message.method, message.params]);
+      return pack(msg);
     }
     case MessageType.Complete: {
-      if (typeof message.id !== "number") {
+      if (typeof msg[1] !== "number") {
         throw new Error(
           `Unsubscribe message must have a id key of value number`
         );
       }
 
-      return pack([message.type, message.id]);
+      return pack(msg);
     }
     case MessageType.Next: {
-      if (typeof message.id !== "number") {
+      if (typeof msg[1] !== "number") {
         throw new Error(`Next message must have a id key of value number`);
       }
 
-      return pack([message.type, message.id, message.value]);
+      return pack(msg);
     }
     case MessageType.Error: {
-      if (typeof message.id !== "number") {
+      if (typeof msg[1] !== "number") {
         throw new Error(`Error message must have a id key of value number`);
       }
 
-      if (typeof message.code !== "string") {
-        throw new Error(`Error message must have a code key of value string`);
+      if (typeof msg[2] !== "string") {
+        throw new Error(
+          `Error message must have a code key of value string: ${msg[2]}`
+        );
       }
 
-      return pack([message.type, message.id, message.code, message.data]);
+      return pack(msg);
+    }
+    case MessageType.Ping: {
+      return pack(msg);
+    }
+    case MessageType.Pong: {
+      return pack(msg);
     }
     default:
-      throw new Error(`Unknown message type: ${message}`);
+      throw new Error(`Unknown message type: ${msg}`);
   }
+}
+
+/**
+ * A representation of any set of values over any amount of time.
+ *
+ * @category Common
+ */
+export interface Sink<T = unknown> {
+  /** Next value arriving. */
+  next(value: T): void;
+  /**
+   * An error that has occured. Calling this function "closes" the sink.
+   * Besides the errors being `Error` and `readonly GraphQLError[]`, it
+   * can also be a `CloseEvent`, but to avoid bundling DOM typings because
+   * the client can run in Node env too, you should assert the close event
+   * type during implementation.
+   */
+  error(code: string, payload?: unknown): void;
+  /** The sink has completed. This function "closes" the sink. */
+  complete(): void;
 }

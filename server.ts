@@ -1,4 +1,3 @@
-import { HTTP } from "./deps.ts";
 import {
   packMessage,
   Message,
@@ -9,8 +8,10 @@ import {
   ErrorMessage,
   CompleteMessage,
   SUBBY_WS_PROTOCOL,
+  PongMessage,
 } from "./common.ts";
 import { isAsyncGenerator, isAsyncIterable } from "./utils.ts";
+import { HTTP } from "./deps.ts";
 
 export type Method<State, Params = unknown, Result = unknown> = (
   params: Params,
@@ -23,8 +24,6 @@ export type Method<State, Params = unknown, Result = unknown> = (
 
 export interface Context<State = any, InitPayload = any> {
   readonly socket: WebSocket;
-  readonly req: Request;
-  readonly connInfo?: HTTP.ConnInfo;
 
   readonly opened: boolean;
   readonly initiated: boolean;
@@ -32,7 +31,7 @@ export interface Context<State = any, InitPayload = any> {
 
   readonly initPayload?: Readonly<InitPayload>;
 
-  readonly subscriptions: Record<
+  readonly subscriptions: Map<
     number,
     AsyncGenerator<unknown> | AsyncIterable<unknown> | null
   >;
@@ -47,16 +46,19 @@ export interface ServerOptions<State, InitPayload> {
   /** Time in ms */
   connectionInitWaitTimeout?: number;
 
-  /** The initial state of a connection */
-  initState: (req: Request, connInfo?: HTTP.ConnInfo) => Promise<State> | State;
+  /** Initiate the state of a connection */
+  initState?: (
+    req: Request,
+    connInfo?: HTTP.ConnInfo
+  ) => Promise<State> | State;
 
   /** A function to decline a connection and/or set context */
-  onOpen?: <OpenPayload>(
+  handleOpen?: <OpenPayload>(
     ctx: Context<State, InitPayload>
   ) => Promise<OpenPayload | void> | OpenPayload | void;
 
   /** Function called when the connection is just about to be acknowledged */
-  onAck?: <AckPayload>(
+  handleInit?: <AckPayload>(
     ctx: Context<State, InitPayload>
   ) => Promise<AckPayload | void> | AckPayload | void;
 
@@ -66,48 +68,62 @@ export interface ServerOptions<State, InitPayload> {
     code: number,
     reason: string
   ) => void;
+
+  /** Fires when a ping has been received */
+  onPing?: (ctx: Context<State, InitPayload>, payload?: unknown) => void;
+
+  /** Fires when a pong is received */
+  onPong?: (ctx: Context<State, InitPayload>, payload?: unknown) => void;
+
+  /** Fires on all messages sent */
+  onMessage?: (message: Message) => void;
 }
 
 export function createServer<State, InitPayload>(
   options: ServerOptions<State, InitPayload>
 ) {
-  const connectionInitWaitTimeout = options.connectionInitWaitTimeout || 5000;
+  const { connectionInitWaitTimeout = 3_000 } = options;
 
   return {
     /**
-     * Handles incoming HTTP request and upgrades to Subby websocket
-     * @param req
-     * @param connInfo
+     * Handle Subby messages on a Websocket connection.
+     * @important be sure to set socket.binaryType to "arraybuffer"
+     *
+     * @param socket The websocket to use for the connection
+     * @param state
      * @returns
      */
-    async upgradeRequest(req: Request, connInfo?: HTTP.ConnInfo) {
-      if (!req.headers.get("upgrade")) {
-        throw new Error(`Request is not trying to upgrade`);
+    async upgrade(req: Request, connInfo?: HTTP.ConnInfo) {
+      // Check protocol header
+      if (req.headers.get("sec-websocket-protocol") !== SUBBY_WS_PROTOCOL) {
+        return new Response("Invalid protocol", {
+          status: HTTP.Status.BadRequest,
+        });
       }
 
+      // Let's attempt to upgrade to websocket, otherwise we return bad request.
       let response, socket: WebSocket;
       try {
         ({ response, socket } = Deno.upgradeWebSocket(req, {
           protocol: SUBBY_WS_PROTOCOL,
         }));
-
-        // We do only binary with msgpack
         socket.binaryType = "arraybuffer";
       } catch {
         return new Response(null, { status: HTTP.Status.BadRequest });
       }
 
-      const state = await options.initState(req, connInfo);
-      const ctx: Context<State> = {
-        socket,
-        req,
-        connInfo,
+      if (socket.binaryType && socket.binaryType !== "arraybuffer") {
+        throw new Error(`socket.binaryType must be set to "arraybuffer"`);
+      }
 
+      const state = (await options.initState?.(req, connInfo)) || ({} as State);
+
+      const ctx: Context<State, InitPayload> = {
+        socket,
         opened: false,
         initiated: false,
         acknowledged: false,
-
-        subscriptions: {},
+        subscriptions: new Map(),
         state,
       };
 
@@ -128,17 +144,12 @@ export function createServer<State, InitPayload>(
         // As soon as the connection opens, we emit the connection open message
         // if configured. Note that this means we have another 'opened' state
         // in case the onOpen function returns a promise.
-        const openPayload = await options.onOpen?.(ctx);
+        const openPayload = await options.handleOpen?.(ctx);
 
         // @ts-expect-error: I can write
         ctx.opened = true;
 
-        socket.send(
-          packMessage({
-            type: MessageType.ConnectionOpen,
-            payload: openPayload,
-          })
-        );
+        socket.send(packMessage([MessageType.ConnectionOpen, openPayload]));
       };
 
       socket.onmessage = async ({ data }: MessageEvent<ArrayBuffer>) => {
@@ -152,13 +163,12 @@ export function createServer<State, InitPayload>(
 
         let message: Message;
         try {
-          const view = new Uint8Array(data);
-          message = unpackMessage(view);
+          message = unpackMessage(data);
         } catch (err) {
           return socket.close(CloseCode.BadRequest, "Invalid message received");
         }
 
-        switch (message.type) {
+        switch (message[0]) {
           case MessageType.ConnectionInit: {
             if (ctx.initiated) {
               return socket.close(
@@ -173,22 +183,33 @@ export function createServer<State, InitPayload>(
             // @ts-expect-error: I can write
             ctx.initPayload = message.payload;
 
-            const ackPayload = await options.onAck?.(ctx);
+            const ackPayload = await options.handleInit?.(ctx);
             if (ackPayload === false) {
               return socket.close(CloseCode.Forbidden, "Forbidden");
             }
 
             // Always send an ack
-            socket.send(
-              packMessage({
-                type: MessageType.ConnectionAck,
-                payload: ackPayload,
-              })
-            );
+            socket.send(packMessage([MessageType.ConnectionAck, ackPayload]));
 
             // @ts-expect-error: I can write
             ctx.acknowledged = true;
             return;
+          }
+
+          case MessageType.Ping: {
+            options.onPing?.(ctx, message[1]);
+
+            const pong: PongMessage = [MessageType.Pong];
+
+            if (message[1]) {
+              pong[1] = message[1];
+            }
+
+            socket.send(packMessage(pong));
+            return;
+          }
+          case MessageType.Pong: {
+            return options.onPong?.(ctx, message[1]);
           }
 
           case MessageType.Subscribe: {
@@ -196,7 +217,7 @@ export function createServer<State, InitPayload>(
               return socket.close(CloseCode.Unauthorized, "Unauthorized");
             }
 
-            const { id } = message;
+            const id = message[1];
 
             if (id in ctx.subscriptions) {
               return socket.close(
@@ -207,25 +228,21 @@ export function createServer<State, InitPayload>(
 
             // if this turns out to be a streaming operation, the subscription value
             // will change to an `AsyncIterable`, otherwise it will stay as is
-            ctx.subscriptions[id] = null;
+            ctx.subscriptions.set(id, null);
 
             const emit = {
-              next: async (value: NextMessage["value"]) => {
-                const nextMessage: NextMessage = {
-                  id,
-                  type: MessageType.Next,
-                  value,
-                };
+              next: async (value: NextMessage[2]) => {
+                const nextMessage: NextMessage = [MessageType.Next, id, value];
 
                 await socket.send(packMessage<MessageType.Next>(nextMessage));
               },
-              error: async (code: string, data?: unknown) => {
-                const errorMessage: ErrorMessage = {
+              error: async (code: string, payload?: unknown) => {
+                const errorMessage: ErrorMessage = [
+                  MessageType.Error,
                   id,
-                  type: MessageType.Error,
                   code,
-                  data,
-                };
+                  payload,
+                ];
 
                 await socket.send(packMessage<MessageType.Error>(errorMessage));
               },
@@ -236,10 +253,10 @@ export function createServer<State, InitPayload>(
               complete: async (notifyClient: boolean) => {
                 if (!notifyClient) return;
 
-                const completeMessage: CompleteMessage = {
+                const completeMessage: CompleteMessage = [
+                  MessageType.Complete,
                   id,
-                  type: MessageType.Complete,
-                };
+                ];
 
                 await socket.send(
                   packMessage<MessageType.Complete>(completeMessage)
@@ -248,7 +265,8 @@ export function createServer<State, InitPayload>(
             };
 
             // Check if the method is valid
-            const method = options.methods?.[message.method];
+            const methodName = message[2];
+            const method = options.methods?.[methodName];
 
             if (!method) {
               emit.error("NotFound", {
@@ -258,18 +276,18 @@ export function createServer<State, InitPayload>(
             }
 
             try {
-              const methodResult = await method(message.params, ctx);
+              const methodResult = await method(message[3], ctx);
 
               if (isAsyncIterable(methodResult)) {
                 /** multiple emitted results */
-                ctx.subscriptions[id] = methodResult;
+                ctx.subscriptions.set(id, methodResult);
 
-                if (!(id in ctx.subscriptions)) {
+                if (!ctx.subscriptions.has(id)) {
                   // subscription was completed/canceled before the operation settled
                   if (isAsyncGenerator(methodResult))
                     methodResult.return(undefined);
                 } else {
-                  ctx.subscriptions[id] = methodResult;
+                  ctx.subscriptions.set(id, methodResult);
                   for await (const result of methodResult) {
                     await emit.next(result);
                   }
@@ -278,28 +296,29 @@ export function createServer<State, InitPayload>(
                 /** single emitted result */
                 // if the client completed the subscription before the single result
                 // became available, he effectively canceled it and no data should be sent
-                if (id in ctx.subscriptions) await emit.next(methodResult);
+                if (ctx.subscriptions.has(id)) await emit.next(methodResult);
               }
 
               // lack of subscription at this point indicates that the client
               // completed the subscription, he doesnt need to be reminded
-              await emit.complete(id in ctx.subscriptions);
+              await emit.complete(ctx.subscriptions.has(id));
             } catch (err) {
               const code = err.code || "InternalError";
               const data = err.data || { message: err.message };
               await emit.error(code, data);
             } finally {
-              delete ctx.subscriptions[id];
+              ctx.subscriptions.delete(id);
             }
 
             return;
           }
 
           case MessageType.Complete: {
-            const subscription = ctx.subscriptions[message.id];
+            const id = message[1];
+            const subscription = ctx.subscriptions.get(id);
             if (isAsyncGenerator(subscription))
               await subscription.return(undefined);
-            delete ctx.subscriptions[message.id]; // deleting the subscription means no further activity should take place
+            ctx.subscriptions.delete(id); // deleting the subscription means no further activity should take place
             return;
           }
 
