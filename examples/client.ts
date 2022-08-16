@@ -34,6 +34,12 @@ const client = createClient({
   },
 });
 
+const start = performance.now();
+client.warmup().then(() => {
+  const end = performance.now();
+  console.log(`warmup took ${end - start}ms`);
+});
+
 setTimeout(() => {
   client.subscribe(
     "test",
