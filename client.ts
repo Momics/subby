@@ -11,13 +11,6 @@ import {
 } from "./common.ts";
 import { isObject, limitCloseReason } from "./utils.ts";
 
-type ClientStatus =
-  | "closed" // Socket is closed
-  | "connecting" // Socket is connecting
-  | "connected" // Socket is connected but didn't receive open message yet
-  | "opened" // Received open message from server, not yet ready for messages
-  | "acknowledged"; // server has acknowledged the connection, messages can now flow
-
 export type EventClosed = "closed";
 export type EventConnecting = "connecting";
 export type EventConnected = "connected";
