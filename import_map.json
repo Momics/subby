@@ -1,6 +1,5 @@
 {
   "imports": {
-    "msgpackr": "https://esm.sh/msgpackr@1.6.1",
-    "@noble/ed25519": "https://esm.sh/@noble/ed25519@1.6.1"
+    "msgpackr": "https://esm.sh/msgpackr@1.6.1"
   }
 }
