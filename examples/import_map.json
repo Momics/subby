@@ -1,0 +1,5 @@
+{
+  "imports": {
+    "msgpackr": "https://esm.sh/v87/msgpackr@1.6.1"
+  }
+}

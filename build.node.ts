@@ -1,4 +1,4 @@
-// ex. scripts/build_npm.ts
+// USAGE: deno run -A .\build.node.ts 0.0.3
 import { build, emptyDir } from "https://deno.land/x/dnt@0.30.0/mod.ts";
 
 await emptyDir("./npm");
@@ -9,7 +9,6 @@ await build({
   outDir: "./npm",
   shims: {
     // see JS docs for overview and more options
-    deno: true,
   },
   package: {
     // package.json properties

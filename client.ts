@@ -255,12 +255,6 @@ export function createClient<OpenPayload, InitPayload, AckPayload>(
       global.WebSocket ||
       // @ts-expect-error: Support more browsers
       global.MozWebSocket;
-  } else if (typeof window !== "undefined") {
-    ws =
-      // @ts-expect-error: Deno doesn't support websocket on window
-      window.WebSocket ||
-      // @ts-expect-error: Support more browsers
-      window.MozWebSocket;
   }
   if (!ws) throw new Error("WebSocket implementation missing.");
   const WebSocketImpl = ws;
