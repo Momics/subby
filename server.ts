@@ -13,7 +13,7 @@ import {
 import { isAsyncGenerator, isAsyncIterable } from "./utils.ts";
 import { HTTP } from "./deps.ts";
 
-export type Method<State, Params = unknown, Result = unknown> = (
+export type Method<State, Params, Result> = (
   params: Params,
   ctx: Context<State>
 ) =>
@@ -41,7 +41,7 @@ export interface Context<State = any, InitPayload = any> {
 
 export interface ServerOptions<State, OpenPayload, InitPayload, AckPayload> {
   /** All callable methods */
-  methods?: { [key: string]: Method<State> };
+  methods?: { [key: string]: Method<State, any, any> };
 
   /** Time in ms */
   connectionInitWaitTimeout?: number;
