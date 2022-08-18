@@ -338,7 +338,8 @@ export function createClient<OpenPayload, InitPayload, AckPayload>(
     locks = 0,
     retrying = false,
     retries = 0,
-    disposed = false;
+    disposed = false,
+    lazyCloseTimer: number;
 
   async function connect(): Promise<
     [
@@ -531,7 +532,9 @@ export function createClient<OpenPayload, InitPayload, AckPayload>(
               // if the keepalive is set, allow for the specified calmdown time and
               // then complete. but only if no lock got created in the meantime and
               // if the socket is still open
-              setTimeout(() => {
+              clearTimeout(lazyCloseTimer); // Clear any other lazy close timers
+              // Set a new one
+              lazyCloseTimer = setTimeout(() => {
                 if (!locks && socket.readyState === WebSocketImpl.OPEN)
                   complete();
               }, lazyCloseTimeout);
