@@ -76,7 +76,13 @@ export interface ServerOptions<State, OpenPayload, InitPayload, AckPayload> {
   onPong?: (ctx: Context<State, InitPayload>, payload?: unknown) => void;
 
   /** Fires on all messages sent */
-  onMessage?: (message: Message) => void;
+  onMessageSent?: (message: Message, ctx: Context<State, InitPayload>) => void;
+
+  /** Fires on all messages received */
+  onMessageReceived?: (
+    message: Message,
+    ctx: Context<State, InitPayload>
+  ) => void;
 }
 
 export function createServer<State, OpenPayload, InitPayload, AckPayload>(
@@ -127,6 +133,14 @@ export function createServer<State, OpenPayload, InitPayload, AckPayload>(
         state,
       };
 
+      // Function used to send messages (so we can wrap it with analytics)
+      const send = (message: Message) => {
+        socket.send(packMessage(message));
+
+        // Fire onMessageSent event
+        options.onMessageSent?.(message, ctx);
+      };
+
       // kick the client off (close socket) if the connection has
       // not been initialised after the specified wait timeout
       const connectionInitWait =
@@ -149,7 +163,7 @@ export function createServer<State, OpenPayload, InitPayload, AckPayload>(
         // @ts-expect-error: I can write
         ctx.opened = true;
 
-        socket.send(packMessage([MessageType.ConnectionOpen, openPayload]));
+        send([MessageType.ConnectionOpen, openPayload]);
       };
 
       socket.onmessage = async ({ data }: MessageEvent<ArrayBuffer>) => {
@@ -167,6 +181,9 @@ export function createServer<State, OpenPayload, InitPayload, AckPayload>(
         } catch (err) {
           return socket.close(CloseCode.BadRequest, "Invalid message received");
         }
+
+        // If a message received handler is set, call it
+        options.onMessageReceived?.(message, ctx);
 
         switch (message[0]) {
           case MessageType.ConnectionInit: {
@@ -189,7 +206,7 @@ export function createServer<State, OpenPayload, InitPayload, AckPayload>(
             }
 
             // Always send an ack
-            socket.send(packMessage([MessageType.ConnectionAck, ackPayload]));
+            send([MessageType.ConnectionAck, ackPayload]);
 
             // @ts-expect-error: I can write
             ctx.acknowledged = true;
@@ -205,7 +222,7 @@ export function createServer<State, OpenPayload, InitPayload, AckPayload>(
               pong[1] = message[1];
             }
 
-            socket.send(packMessage(pong));
+            send(pong);
             return;
           }
           case MessageType.Pong: {
@@ -234,7 +251,7 @@ export function createServer<State, OpenPayload, InitPayload, AckPayload>(
               next: async (value: NextMessage[2]) => {
                 const nextMessage: NextMessage = [MessageType.Next, id, value];
 
-                await socket.send(packMessage<MessageType.Next>(nextMessage));
+                await send(nextMessage);
               },
               error: async (code: string, payload?: unknown) => {
                 const errorMessage: ErrorMessage = [
@@ -244,7 +261,7 @@ export function createServer<State, OpenPayload, InitPayload, AckPayload>(
                   payload,
                 ];
 
-                await socket.send(packMessage<MessageType.Error>(errorMessage));
+                await send(errorMessage);
               },
               /**
                * Emitter used to hang up a call
@@ -258,9 +275,7 @@ export function createServer<State, OpenPayload, InitPayload, AckPayload>(
                   id,
                 ];
 
-                await socket.send(
-                  packMessage<MessageType.Complete>(completeMessage)
-                );
+                await send(completeMessage);
               },
             };
 
