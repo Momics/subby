@@ -182,7 +182,7 @@ export interface ClientOptions<OpenPayload, InitPayload, AckPayload> {
    *
    * @default 0
    */
-  lazyCloseTimeout?: number;
+  lazyCloseTimeoutMs?: number;
 
   /**
    * The timout between dispatched keep-alive messages, naimly server pings. Internally
@@ -230,7 +230,7 @@ export function createClient<OpenPayload, InitPayload, AckPayload>(
     handleOpen,
     lazy = true,
     onNonLazyError = console.error,
-    lazyCloseTimeout = 0,
+    lazyCloseTimeoutMs = 0,
     keepAlive = 0,
     retryAttempts = 5,
     retryWait = randomisedExponentialBackoff,
@@ -339,7 +339,7 @@ export function createClient<OpenPayload, InitPayload, AckPayload>(
     retrying = false,
     retries = 0,
     disposed = false,
-    lazyCloseTimer: number;
+    lazyCloseTimeout: number;
 
   async function connect(): Promise<
     [
@@ -348,6 +348,10 @@ export function createClient<OpenPayload, InitPayload, AckPayload>(
       waitForReleaseOrThrowOnClose: Promise<void>
     ]
   > {
+    // clear the lazy close timeout immediately so that close gets debounced
+    // see: https://github.com/enisdenjo/graphql-ws/issues/388
+    clearTimeout(lazyCloseTimeout);
+
     const [socket, throwOnClose] = await (connecting ??
       (connecting = new Promise<Connected>((connected, denied) =>
         (async () => {
@@ -528,16 +532,12 @@ export function createClient<OpenPayload, InitPayload, AckPayload>(
           if (!locks) {
             // and if no more locks are present, complete the connection
             const complete = () => socket.close(1000, "Normal Closure");
-            if (isFinite(lazyCloseTimeout) && lazyCloseTimeout > 0) {
+            if (isFinite(lazyCloseTimeoutMs) && lazyCloseTimeoutMs > 0) {
               // if the keepalive is set, allow for the specified calmdown time and
-              // then complete. but only if no lock got created in the meantime and
-              // if the socket is still open
-              clearTimeout(lazyCloseTimer); // Clear any other lazy close timers
-              // Set a new one
-              lazyCloseTimer = setTimeout(() => {
-                if (!locks && socket.readyState === WebSocketImpl.OPEN)
-                  complete();
-              }, lazyCloseTimeout);
+              // then complete if the socket is still open.
+              lazyCloseTimeout = setTimeout(() => {
+                if (socket.readyState === WebSocketImpl.OPEN) complete();
+              }, lazyCloseTimeoutMs);
             } else {
               // otherwise complete immediately
               complete();
