@@ -57,17 +57,17 @@ export type EventConnectedListener = (socket: WebSocket) => void;
  * a 'notification' listener. Use onOpen to 'respond' to the open message with
  * an init message.
  */
-export type EventOpenedListener = (
+export type EventOpenedListener<OpenPayload = unknown> = (
   socket: WebSocket,
-  payload?: unknown
+  payload?: OpenPayload
 ) => void;
 
 /**
  * Fires when the connection has been acknowledged by the server.
  */
-export type EventAcknowledgedListener = (
+export type EventAcknowledgedListener<AckPayload = unknown> = (
   socket: WebSocket,
-  payload?: unknown
+  payload?: AckPayload
 ) => void;
 
 /**
@@ -92,9 +92,9 @@ export type EventErrorListener = (error: unknown) => void;
  *
  * @category Client
  */
-export type EventPingListener = (
+export type EventPingListener<Payload = PingMessage[1]> = (
   received: boolean,
-  payload: PingMessage[1]
+  payload?: Payload
 ) => void;
 
 /**
@@ -103,9 +103,9 @@ export type EventPingListener = (
  *
  * @category Client
  */
-export type EventPongListener = (
+export type EventPongListener<Payload = PongMessage[1]> = (
   received: boolean,
-  payload: PongMessage[1]
+  payload?: Payload
 ) => void;
 
 /** @category Client */
