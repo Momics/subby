@@ -2,58 +2,74 @@ import { createClient } from "../client.ts";
 
 const client = createClient({
   url: "ws://localhost:4004",
-  // lazyCloseTimeout: 2000,
-
-  handleOpen(openPayload) {
-    console.log("onOpen", openPayload);
-
+  handleOpen() {
     return {
       init: "true",
     };
   },
-
-  on: {
-    connecting: () => {
-      console.log("connecting");
-    },
-    connected: () => {
-      console.log("connected");
-    },
-    opened: (p) => {
-      console.log("opened", p);
-    },
-    acknowledged: () => {
-      console.log("acknowledged");
-    },
-    closed(e) {
-      console.log("closed", e.code, e.reason);
-    },
-    message(msg) {
-      console.log("message", msg);
-    },
-  },
 });
 
-// const start = performance.now();
-// client.warmup().then(() => {
-//   const end = performance.now();
-//   console.log(`warmup took ${end - start}ms`);
-// });
+function subscribe<Name extends string, Params = unknown, Result = unknown>(
+  name: Name,
+  params: Params
+): AsyncGenerator<Result> {
+  let deferred: {
+    resolve: (done: boolean) => void;
+    reject: (err: unknown) => void;
+  } | null = null;
+  const pending: Result[] = [];
+  let throwMe: unknown = null,
+    done = false;
 
-setTimeout(() => {
-  client.subscribe(
-    "test",
-    { test: true },
-    {
-      complete() {
-        console.log("complete");
-      },
-      error() {
-        console.log("error");
-      },
-      next(value) {
-        console.log("next", value);
-      },
-    }
-  );
-}, 5000);
+  const dispose = client.subscribe(name, params, {
+    next: (data: Result) => {
+      pending.push(data);
+      deferred?.resolve(false);
+    },
+    error: (err) => {
+      throwMe = err;
+      deferred?.reject(throwMe);
+    },
+    complete: () => {
+      done = true;
+      deferred?.resolve(true);
+    },
+  });
+
+  return {
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+    async next() {
+      if (done) return { done: true, value: undefined };
+      if (throwMe) throw throwMe;
+      if (pending.length) return { value: pending.shift()! };
+      return (await new Promise<boolean>(
+        (resolve, reject) => (deferred = { resolve, reject })
+      ))
+        ? { done: true, value: undefined }
+        : { value: pending.shift()! };
+    },
+    async throw(err) {
+      throw err;
+    },
+    async return() {
+      dispose();
+      return { done: true, value: undefined };
+    },
+  };
+}
+
+(async () => {
+  const subscription = subscribe("testSubscription", {
+    test: true,
+  });
+  // subscription.return() to dispose
+
+  for await (const result of subscription) {
+    // next = result = { data: { greetings: 5x } }
+    console.log(result);
+  }
+  // complete
+  console.log("complete");
+})();

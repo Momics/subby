@@ -10,17 +10,22 @@ interface InitPayload {
 }
 
 interface OpenPayload {
-  sign: true;
+  connected: true;
 }
 
 interface State {
   test?: boolean;
 }
 
+// Server uses a three way handshake to establish a connection
+// Server => Client (ack)
+// Client => Server (init)
+// Server => Client (open)
+// All handshakes messages can contain a payload
 const server = createServer<State, OpenPayload, InitPayload, undefined>({
   connectionInitWaitTimeout: 2000,
   methods: {
-    test: async (params, ctx) => {
+    testRequest: async (params, ctx) => {
       const res = await fetch("https://momics.eu");
 
       return {
@@ -29,24 +34,35 @@ const server = createServer<State, OpenPayload, InitPayload, undefined>({
         text: res.statusText,
       };
     },
+    testSubscription: async function* (params, ctx) {
+      console.log("test");
+      yield { test: true };
+      yield { test: true };
+      yield { test: true };
+    },
   },
   handleInit({ initPayload }) {
     console.log("handleInit", initPayload);
 
+    // Do something like auth here
     if (initPayload?.init !== "true") {
+      // Deny the connection (throws Forbidden)
       return false;
     }
   },
   handleOpen(ctx) {
     return {
-      sign: true,
+      connected: true,
     };
   },
   onClose(ctx, code, reason) {
     console.log("onClose", code, reason);
   },
-  onMessage() {
-    console.log("onMessage");
+  onMessageSent() {
+    console.log("onMessageSent");
+  },
+  onMessageReceived() {
+    console.log("onMessageReceived");
   },
   onPing() {
     console.log("onPing");
